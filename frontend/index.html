@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>TripGraph Live · Tourism Recommendation System on Neo4j</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script type="importmap">{ "imports": { "three": "./vendor/three.module.min.js" } }</script>
+</head>
+<body>
+  <div id="fileBanner" class="banner" hidden>Open this app through the backend: run <code>python app.py</code> and open <a href="http://127.0.0.1:5000">http://127.0.0.1:5000</a>.</div>
+
+  <header class="topbar">
+    <div class="brand">
+      <svg viewBox="0 0 32 32" class="logo" aria-hidden="true"><path d="M5 25 L13 10 L19 19 L27 6" /><circle cx="5" cy="25" r="3"/><circle cx="13" cy="10" r="3"/><circle cx="19" cy="19" r="3"/><circle cx="27" cy="6" r="3.4" class="hot"/></svg>
+      <div><b>TripGraph</b> <span>Live</span></div>
+    </div>
+    <nav class="tabs" id="tabs">
+      <button data-page="lab" class="active">🧭 Route Lab</button>
+      <button data-page="explore">🗺️ Explore</button>
+      <button data-page="recommend">✨ Recommend</button>
+      <button data-page="build">🧱 Build graph</button>
+      <button data-page="evaluate">📊 Evaluate</button>
+      <button data-page="console">⌨️ Cypher</button>
+    </nav>
+    <div class="status"><span id="dbPill" class="pill">Neo4j…</span></div>
+  </header>
+
+  <!-- ============== ROUTE LAB ============== -->
+  <section class="page" id="page-lab">
+    <div class="stage" id="stage-lab">
+      <div class="hint">Drag to rotate · scroll to zoom · right-drag to pan · <b id="toolHint">click a destination to set the start</b></div>
+      <div class="log" id="labLog"></div>
+    </div>
+    <aside class="panel">
+      <div class="card">
+        <div class="card-title">TRIP <span class="right muted" id="labPick">pick on the map</span></div>
+        <div class="trip-ends">
+          <div class="end start"><span>FROM</span><b id="labStart">—</b></div>
+          <div class="arrow">→</div>
+          <div class="end goal"><span>TO</span><b id="labGoal">—</b></div>
+        </div>
+        <div class="row2">
+          <label>Algorithm
+            <select id="labAlgo">
+              <option value="dijkstra">Dijkstra (optimal)</option>
+              <option value="astar">A* (optimal, guided)</option>
+              <option value="bfs">BFS (fewest legs)</option>
+              <option value="greedy">Greedy best-first (fast, not optimal)</option>
+            </select></label>
+          <label>Optimise
+            <select id="labMetric"><option value="hours">Time</option><option value="distanceKm">Distance</option><option value="costInr">Cost</option></select></label>
+        </div>
+        <div class="toggles" id="labModes">
+          <button class="tog on road" data-mode="road">🚌 Road</button>
+          <button class="tog on rail" data-mode="rail">🚆 Rail</button>
+          <button class="tog on flight" data-mode="flight">✈️ Flight</button>
+        </div>
+        <label class="slider">Search speed <output id="labSpeedOut">8 steps/s</output>
+          <input type="range" id="labSpeed" min="1" max="40" value="8"></label>
+        <div class="btns">
+          <button class="btn primary" id="labRun">▶ Find route</button>
+          <button class="btn" id="labStep" title="One step">⏭ Step</button>
+          <button class="btn" id="labInstant" title="Skip the animation">⚡ Instant</button>
+          <button class="btn ghost" id="labReset">Reset</button>
+        </div>
+        <label class="check"><input type="checkbox" id="labAutoTravel" checked> Drive the route when found</label>
+      </div>
+
+      <div class="card">
+        <div class="card-title">SEARCH STATE <span class="right"><span class="badge" id="labBadge">IDLE</span></span></div>
+        <p class="msg" id="labMsg">Pick a start and a destination on the map.</p>
+        <div class="tiles">
+          <div class="tile"><span>EXPANDED</span><b id="tExpanded">0</b></div>
+          <div class="tile"><span>FRONTIER</span><b id="tFrontier">0</b></div>
+          <div class="tile"><span>RELAXED</span><b id="tRelaxed">0</b></div>
+          <div class="tile"><span>BEST COST</span><b id="tCost">—</b></div>
+        </div>
+        <div class="pq"><div class="pq-head"><span>Priority queue (next to expand)</span><span id="pqKey">g + h</span></div><div id="pqList" class="pq-list"></div></div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">JOURNEY <span class="right"><span class="badge" id="tripBadge">PARKED</span></span></div>
+        <div class="progress"><div id="tripBar"></div></div>
+        <div class="tiles">
+          <div class="tile wide"><span>CURRENT LEG</span><b id="jLeg">—</b></div>
+          <div class="tile"><span>HOURS</span><b id="jHours">0</b></div>
+          <div class="tile"><span>KM</span><b id="jKm">0</b></div>
+          <div class="tile"><span>COST ₹</span><b id="jCost">0</b></div>
+          <div class="tile"><span>RE-ROUTES</span><b id="jReroutes">0</b></div>
+        </div>
+        <label class="slider">Travel speed <output id="travelOut">1×</output><input type="range" id="travelSpeed" min="1" max="8" value="2"></label>
+        <p class="muted small">Close a road or add traffic on the route while it drives: the traveller re-plans from the next town.</p>
+      </div>
+
+      <div class="card">
+        <div class="card-title">ENVIRONMENT</div>
+        <select id="labPreset">
+          <option value="normal">Normal conditions</option>
+          <option value="monsoon">Monsoon: ghat roads closed</option>
+          <option value="rail">Rail strike</option>
+          <option value="flights">Flights grounded</option>
+          <option value="festival">Festival rush: city traffic ×2</option>
+          <option value="cyclone">Coastal cyclone: coast roads closed</option>
+        </select>
+        <div class="tools" id="labTools">
+          <button class="tool on" data-tool="route">📍 Set trip</button>
+          <button class="tool" data-tool="close">⛔ Close road</button>
+          <button class="tool" data-tool="traffic">🚦 Traffic</button>
+          <button class="tool" data-tool="add">➕ Add route</button>
+          <button class="tool" data-tool="erase">🧽 Clear</button>
+        </div>
+        <div class="add-opts" id="addOpts" hidden>New route mode
+          <select id="addMode"><option value="road">road</option><option value="rail">rail</option><option value="flight">flight</option></select>
+          <span class="muted small">click two towns</span></div>
+        <p class="small muted" id="envSummary">No closures or traffic.</p>
+        <div class="btns">
+          <button class="btn" id="labVerify">✔ Verify in Neo4j</button>
+          <button class="btn" id="labSave">💾 Save scenario</button>
+          <button class="btn ghost" id="labRestore">↺ Restore network</button>
+        </div>
+        <div id="verifyOut"></div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">COMPARE &amp; ALTERNATIVES</div>
+        <div class="btns"><button class="btn" id="labCompare">Race all algorithms</button><button class="btn" id="labAlt">Show 3 alternatives</button></div>
+        <div id="compareOut"></div>
+        <details class="drawer"><summary>How the algorithms work</summary>
+          <ul>
+            <li><b>BFS</b> expands towns in order of legs travelled: fewest stops, ignores hours.</li>
+            <li><b>Dijkstra</b> always expands the cheapest town so far: optimal for time, distance or cost.</li>
+            <li><b>A*</b> adds a straight-line estimate to the goal (never an over-estimate), so it expands fewer towns and is still optimal.</li>
+            <li><b>Greedy</b> follows only the estimate: very fast, sometimes a worse route.</li>
+            <li><b>Verify in Neo4j</b> runs the same question as Cypher on the database, with your closures and traffic as parameters.</li>
+          </ul></details>
+      </div>
+    </aside>
+  </section>
+
+  <!-- ============== EXPLORE ============== -->
+  <section class="page" id="page-explore" hidden>
+    <div class="stage" id="stage-explore">
+      <div class="hint">Tower height and colour = match score · <b>click a destination for details</b></div>
+      <div class="legend-bar" id="exLegend"></div>
+    </div>
+    <aside class="panel">
+      <div class="card">
+        <div class="card-title">MODE</div>
+        <div class="seg" id="exMode"><button class="on" data-mode="match">🎯 Interest match</button><button data-mode="reach">⏱️ Reachable area</button></div>
+      </div>
+      <div class="card" id="exMatchCard">
+        <div class="card-title">WHAT DO YOU LIKE?</div>
+        <div class="chips" id="exCats"></div>
+        <label class="slider">Travel month <output id="exMonthOut">December</output><input type="range" id="exMonth" min="1" max="12" value="12"></label>
+        <div class="seg small" id="exBudget"><button data-b="any">Any</button><button data-b="budget">Budget</button><button class="on" data-b="mid">Mid</button><button data-b="luxury">Luxury</button></div>
+        <div id="exRank" class="rank"></div>
+        <details class="drawer"><summary>Live Cypher</summary><div id="exCypher"></div></details>
+      </div>
+      <div class="card" id="exReachCard" hidden>
+        <div class="card-title">HOW FAR CAN I GO?</div>
+        <label>From <select id="exFrom"></select></label>
+        <label class="slider">Within <output id="exHoursOut">6 h</output><input type="range" id="exHours" min="1" max="16" step="0.5" value="6"></label>
+        <div class="toggles" id="exModes">
+          <button class="tog on road" data-mode="road">🚌 Road</button><button class="tog on rail" data-mode="rail">🚆 Rail</button><button class="tog on flight" data-mode="flight">✈️ Flight</button>
+        </div>
+        <div id="exReachList" class="rank"></div>
+      </div>
+      <div class="card" id="exDetail"><div class="card-title">DESTINATION</div><p class="muted">Click a tower on the map.</p></div>
+    </aside>
+  </section>
+
+  <!-- ============== RECOMMEND ============== -->
+  <section class="page" id="page-recommend" hidden>
+    <div class="stage" id="stage-recommend">
+      <div class="hint">Beams = recommended destinations · green route = from home to the top pick</div>
+    </div>
+    <aside class="panel">
+      <div class="card">
+        <div class="card-title">TOURIST</div>
+        <div class="people" id="recPeople"></div>
+        <div id="recProfile" class="small muted"></div>
+      </div>
+      <div class="card">
+        <div class="card-title">INTERESTS <span class="right"><button class="link" id="recResetW">reset to profile</button></span></div>
+        <div id="recSliders" class="wsliders"></div>
+        <label class="slider">Travel month <output id="recMonthOut">December</output><input type="range" id="recMonth" min="1" max="12" value="12"></label>
+      </div>
+      <div class="card">
+        <div class="card-title">TOP DESTINATIONS <span class="right muted small" id="recTiming"></span></div>
+        <div id="recDest" class="rank"></div>
+      </div>
+      <div class="card">
+        <div class="card-title">ATTRACTIONS FOR YOU</div>
+        <p class="small muted">Hybrid of <span class="src c">C</span> content (your interest sliders) and <span class="src f">F</span> collaborative (similar tourists). Click one to see why.</p>
+        <div id="recItems" class="rank"></div>
+      </div>
+      <div class="card" id="recWhy" hidden></div>
+      <div class="card">
+        <div class="card-title">VISIT HISTORY <span class="right"><button class="link" id="recUndo">undo demo visits</button></span></div>
+        <div id="recVisits" class="small"></div>
+      </div>
+    </aside>
+  </section>
+
+  <!-- ============== BUILD ============== -->
+  <section class="page" id="page-build" hidden>
+    <div class="stage" id="stage-build">
+      <div class="hint">Run the steps and watch the graph appear</div>
+      <div class="counter-bar" id="buildCounts"></div>
+    </div>
+    <aside class="panel">
+      <div class="card">
+        <div class="card-title">BUILD THE GRAPH IN NEO4J</div>
+        <div class="btns"><button class="btn primary" id="buildAll">▶ Build everything</button><button class="btn" id="buildCheck">🩺 Pre-demo check</button><button class="btn ghost" id="buildReset">🗑 Delete all</button></div>
+        <div id="buildSteps"></div>
+      </div>
+      <div class="card"><div class="card-title">GRAPH MODEL</div><div id="modelSvg"></div><div id="modelInfo" class="small muted">Click a label or relationship.</div></div>
+      <div id="checkOut"></div>
+    </aside>
+  </section>
+
+  <!-- ============== EVALUATE ============== -->
+  <section class="page wide" id="page-evaluate" hidden>
+    <div class="eval-wrap">
+      <div class="card">
+        <div class="card-title">LIVE EVALUATION: CAN EACH RECOMMENDER PREDICT THE NEXT VISIT?</div>
+        <p>Each tourist's most recent visit is hidden. Every recommender gets one guess list of 10. Watch the hits arrive.</p>
+        <div class="btns"><button class="btn primary" id="evalRun">▶ Run evaluation</button><span class="muted small" id="evalProgress"></span></div>
+        <div class="eval-grid">
+          <div id="evalBars" class="bars"></div>
+          <div id="evalTable" class="eval-table"></div>
+        </div>
+        <details class="drawer"><summary>What the numbers mean</summary>
+          <ul><li><b>Hit@5 / Hit@10</b>: share of tourists whose hidden visit is in the top 5 / 10.</li>
+            <li><b>MRR</b>: 1 / rank of the hidden visit, averaged (higher is better).</li>
+            <li>The popularity baseline ignores the tourist. Collaborative filtering needs many similar tourists; with 20 it is limited (sparsity).</li></ul></details>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============== CONSOLE ============== -->
+  <section class="page wide" id="page-console" hidden>
+    <div class="console">
+      <div class="card lib"><div class="card-title">QUERY LIBRARY</div><div id="conLib"></div></div>
+      <div class="con-main">
+        <div class="card">
+          <div class="card-title">CYPHER <span class="right"><label class="check inline"><input type="checkbox" id="conProfile"> PROFILE</label></span></div>
+          <textarea id="conText" rows="9" spellcheck="false"></textarea>
+          <label>Parameters (JSON)<input id="conParams" type="text" value="{}"></label>
+          <div class="btns"><button class="btn primary" id="conRun">▶ Run (Ctrl+Enter)</button><span class="muted small" id="conMeta"></span></div>
+        </div>
+        <div class="con-out"><div class="card"><div id="conTable" class="table-wrap"></div></div><div class="card"><div id="conGraph" class="graph2d"></div></div></div>
+      </div>
+    </div>
+  </section>
+
+  <div id="tooltip" class="tooltip" hidden></div>
+  <div id="toast" class="toast"></div>
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
